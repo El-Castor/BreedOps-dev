@@ -158,13 +158,11 @@ describe.sequential(
       ids.module = module_.data.id;
       fixtureTrait.moduleId = ids.module;
 
-      const moduleTrait = await admin
-        .from("phenotyping_module_traits")
-        .insert({
-          module_id: ids.module,
-          trait_id: ids.trait,
-          display_order: 1,
-        });
+      const moduleTrait = await admin.from("phenotyping_module_traits").insert({
+        module_id: ids.module,
+        trait_id: ids.trait,
+        display_order: 1,
+      });
       if (moduleTrait.error) throw moduleTrait.error;
 
       const programModule = await admin
@@ -357,6 +355,132 @@ describe.sequential(
         .eq("evaluation_date", payloadA.evaluationDate)
         .eq("phenotype_id", ids.phenotype);
       expect(rows.data).toHaveLength(1);
+    });
+
+    it("rejects a forged client payload hash before any scientific write", async () => {
+      const fingerprint = computeConfigFingerprint([fixtureTrait]);
+      const payload = {
+        phenotypeId: ids.phenotype,
+        evaluationDate: "2026-11-12",
+        values: { plant_height: 111 },
+        notes: "Forged client hash",
+      };
+
+      const { body } = await syncOne(undefined, {
+        operationId: randomUUID(),
+        operationType: "PHENOTYPE_TRAIT_EVALUATION",
+        programId: ids.program,
+        phenotypeId: payload.phenotypeId,
+        evaluationDate: payload.evaluationDate,
+        values: payload.values,
+        notes: payload.notes,
+        payloadHash: "0".repeat(64),
+        packConfigurationFingerprint: fingerprint,
+      });
+
+      expect(body.results?.[0].resultCode).toBe("IDEMPOTENCY_PAYLOAD_MISMATCH");
+
+      const rows = await admin
+        .from("phenotype_evaluations")
+        .select("id")
+        .eq("phenotype_id", ids.phenotype)
+        .eq("evaluation_date", payload.evaluationDate);
+
+      expect(rows.data).toHaveLength(0);
+    });
+
+    it("rejects a forged browser programId and trusts the phenotype-derived server program", async () => {
+      const fingerprint = computeConfigFingerprint([fixtureTrait]);
+      const payload = {
+        phenotypeId: ids.phenotype,
+        evaluationDate: "2026-11-13",
+        values: { plant_height: 112 },
+        notes: "Forged program scope",
+      };
+
+      const { body } = await syncOne(undefined, {
+        operationId: randomUUID(),
+        operationType: "PHENOTYPE_TRAIT_EVALUATION",
+        programId: randomUUID(),
+        phenotypeId: payload.phenotypeId,
+        evaluationDate: payload.evaluationDate,
+        values: payload.values,
+        notes: payload.notes,
+        payloadHash: await computePayloadHash(payload),
+        packConfigurationFingerprint: fingerprint,
+      });
+
+      expect(body.results?.[0].resultCode).toBe("VALIDATION_REJECTED");
+
+      const rows = await admin
+        .from("phenotype_evaluations")
+        .select("id")
+        .eq("phenotype_id", ids.phenotype)
+        .eq("evaluation_date", payload.evaluationDate);
+
+      expect(rows.data).toHaveLength(0);
+    });
+
+    it("replays an already committed operation even when configuration changed after the commit", async () => {
+      const fingerprint = computeConfigFingerprint([fixtureTrait]);
+      const payload = {
+        phenotypeId: ids.phenotype,
+        evaluationDate: "2026-11-14",
+        values: { plant_height: 120 },
+        notes: "Commit acknowledged as lost by client",
+      };
+      const operation = {
+        operationId: randomUUID(),
+        operationType: "PHENOTYPE_TRAIT_EVALUATION",
+        programId: ids.program,
+        phenotypeId: payload.phenotypeId,
+        evaluationDate: payload.evaluationDate,
+        values: payload.values,
+        notes: payload.notes,
+        payloadHash: await computePayloadHash(payload),
+        packConfigurationFingerprint: fingerprint,
+      };
+
+      const first = await syncOne(undefined, operation);
+      expect(first.body.results?.[0].resultCode).toBe("SYNCED");
+      expect(first.body.results?.[0].replay).toBe(false);
+
+      const evaluationId = first.body.results?.[0].evaluationId;
+      expect(evaluationId).toBeTruthy();
+
+      const changed = await admin
+        .from("phenotype_traits")
+        .update({ maximum_value: 250 })
+        .eq("id", ids.trait);
+
+      if (changed.error) throw changed.error;
+
+      try {
+        // Simulates: server committed the first request, but the client lost
+        // the acknowledgement and later retries its unchanged outbox item.
+        // Current configuration is now different, but exact replay must win.
+        const retry = await syncOne(undefined, operation);
+
+        expect(retry.body.results?.[0].resultCode).toBe("SYNCED");
+        expect(retry.body.results?.[0].replay).toBe(true);
+        expect(retry.body.results?.[0].evaluationId).toBe(evaluationId);
+
+        const rows = await admin
+          .from("phenotype_evaluations")
+          .select("id")
+          .eq("phenotype_id", ids.phenotype)
+          .eq("evaluation_date", payload.evaluationDate);
+
+        expect(rows.data).toHaveLength(1);
+        expect(rows.data?.[0].id).toBe(evaluationId);
+      } finally {
+        const restored = await admin
+          .from("phenotype_traits")
+          .update({ maximum_value: 300 })
+          .eq("id", ids.trait);
+
+        if (restored.error) throw restored.error;
+      }
     });
 
     it("reports CONFIG_CHANGED when the server-side active-trait configuration no longer matches the pack's fingerprint", async () => {

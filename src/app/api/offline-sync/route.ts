@@ -3,6 +3,7 @@ import { z } from "zod";
 import { resolveIdentity } from "@/lib/auth";
 import { fetchActiveOfflineTraits } from "@/lib/offline/active-traits";
 import { computeConfigFingerprint } from "@/lib/offline/config-fingerprint";
+import { computePayloadHash } from "@/lib/offline/payload-hash";
 import type { OfflineSyncResultCode } from "@/lib/offline/types";
 
 // Narrow, authenticated offline-sync endpoint (V2-07 §18). Never executes
@@ -143,9 +144,83 @@ export async function POST(request: Request) {
 
   const results: OperationResult[] = [];
   for (const op of parsed.data.operations) {
+    const canonicalPayload = {
+      phenotypeId: op.phenotypeId,
+      evaluationDate: op.evaluationDate,
+      values: op.values,
+      notes: op.notes,
+    };
+
+    // The browser-provided hash is never authoritative. Recompute the
+    // canonical payload hash from the content the server actually received.
+    const serverPayloadHash = await computePayloadHash(canonicalPayload);
+
+    if (op.payloadHash !== serverPayloadHash) {
+      results.push(
+        rejected(
+          op.operationId,
+          "IDEMPOTENCY_PAYLOAD_MISMATCH",
+          "Le contenu de l'opération ne correspond pas à son empreinte.",
+        ),
+      );
+      continue;
+    }
+
+    // Resolve an already-committed operation before checking the current
+    // configuration. This makes an acknowledgement-loss retry safe even
+    // when the program configuration changed after the original commit.
+    const { data: preflightData, error: preflightError } = await client.rpc(
+      "preflight_offline_sync_operation",
+      {
+        p_operation_id: op.operationId,
+        p_phenotype_id: op.phenotypeId,
+        p_evaluation_date: op.evaluationDate,
+        p_submitted_values: op.values,
+        p_evaluation_notes: op.notes,
+        p_payload_hash: serverPayloadHash,
+      },
+    );
+
+    if (preflightError) {
+      const { resultCode, detail } = mapRpcErrorMessage(preflightError.message);
+      results.push(rejected(op.operationId, resultCode, detail));
+      continue;
+    }
+
+    const preflight = preflightData as {
+      result_code: "NEW" | "SYNCED";
+      program_id: string;
+      evaluation_id?: string;
+      replay: boolean;
+    };
+
+    if (preflight.result_code === "SYNCED" && preflight.evaluation_id) {
+      results.push({
+        operationId: op.operationId,
+        resultCode: "SYNCED",
+        evaluationId: preflight.evaluation_id,
+        replay: true,
+        message: "Déjà synchronisé (nouvelle tentative sans effet).",
+      });
+      continue;
+    }
+
+    // programId supplied by the browser is only a consistency assertion.
+    // The authoritative program is derived server-side from phenotype_id.
+    if (op.programId !== preflight.program_id) {
+      results.push(
+        rejected(
+          op.operationId,
+          "VALIDATION_REJECTED",
+          "Le programme déclaré ne correspond pas au phénotype ciblé.",
+        ),
+      );
+      continue;
+    }
+
     let currentFingerprint: string;
     try {
-      currentFingerprint = await currentFingerprintFor(op.programId);
+      currentFingerprint = await currentFingerprintFor(preflight.program_id);
     } catch {
       results.push(
         rejected(
@@ -175,7 +250,7 @@ export async function POST(request: Request) {
         p_evaluation_date: op.evaluationDate,
         p_submitted_values: op.values,
         p_evaluation_notes: op.notes,
-        p_payload_hash: op.payloadHash,
+        p_payload_hash: serverPayloadHash,
       },
     );
 

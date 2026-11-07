@@ -1,7 +1,7 @@
 -- Disposable local test fixtures only. Everything is rolled back.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
-SELECT plan(20);
+SELECT plan(24);
 
 INSERT INTO organizations(id,name,slug) VALUES
  ('11111111-0000-0000-0000-000000000f01','Sync Org A','sync-test-a'),
@@ -9,11 +9,13 @@ INSERT INTO organizations(id,name,slug) VALUES
 INSERT INTO auth.users(id) VALUES
  ('22222222-0000-0000-0000-000000000f01'),
  ('22222222-0000-0000-0000-000000000f02'),
- ('22222222-0000-0000-0000-000000000f03');
+ ('22222222-0000-0000-0000-000000000f03'),
+ ('22222222-0000-0000-0000-000000000f04');
 INSERT INTO profiles(user_id,organization_id,role,is_active) VALUES
  ('22222222-0000-0000-0000-000000000f01','11111111-0000-0000-0000-000000000f01','user',true),
  ('22222222-0000-0000-0000-000000000f02','11111111-0000-0000-0000-000000000f02','user',true),
- ('22222222-0000-0000-0000-000000000f03','11111111-0000-0000-0000-000000000f01','user',false);
+ ('22222222-0000-0000-0000-000000000f03','11111111-0000-0000-0000-000000000f01','user',false),
+ ('22222222-0000-0000-0000-000000000f04','11111111-0000-0000-0000-000000000f01','user',true);
 INSERT INTO programs(id,organization_id,code,name) VALUES
  ('55555555-0000-0000-0000-000000000f01','11111111-0000-0000-0000-000000000f01','SYA','Sync program A');
 INSERT INTO parent_lines(id,program_id,line_name) VALUES
@@ -119,13 +121,90 @@ SELECT set_config('request.jwt.claim.sub','22222222-0000-0000-0000-000000000f01'
 SELECT lives_ok(
   $$UPDATE offline_sync_receipts SET payload_hash = 'tampered' WHERE operation_id='eeeeeeee-0000-0000-0000-000000000f01'$$,
   'an UPDATE against a receipt runs (RLS has no UPDATE policy to match against) but...');
-SELECT is(
-  (SELECT payload_hash FROM offline_sync_receipts WHERE operation_id='eeeeeeee-0000-0000-0000-000000000f01'),
-  'hash-a','...it never actually changes the stored payload_hash - the receipt is tamper-resistant');
+SELECT ok(
+  (
+    SELECT payload_hash <> 'tampered'
+    FROM offline_sync_receipts
+    WHERE operation_id='eeeeeeee-0000-0000-0000-000000000f01'
+  ),
+  '...it never actually changes the stored payload_hash - the receipt is tamper-resistant');
 SELECT lives_ok(
   $$DELETE FROM offline_sync_receipts WHERE operation_id='eeeeeeee-0000-0000-0000-000000000f01'$$,
   'a DELETE against a receipt runs (same reason) but...');
 SELECT is((SELECT count(*) FROM offline_sync_receipts WHERE operation_id='eeeeeeee-0000-0000-0000-000000000f01'),1::bigint,'...the receipt row still exists afterward - it cannot be erased by the application role');
+
+
+-- ───────────────── V2-07 exact-once hardening regressions ─────────────────
+
+-- A receipt belongs to the profile that created it. Knowing another user's
+-- operation UUID and payload must not allow replaying or discovering its
+-- result through the mutation RPC.
+SELECT set_config(
+  'request.jwt.claim.sub',
+  '22222222-0000-0000-0000-000000000f04',
+  true
+);
+
+SELECT throws_ok(
+  $$SELECT submit_offline_phenotype_evaluation(
+      'eeeeeeee-0000-0000-0000-000000000f01',
+      'bbbbbbbb-0000-0000-0000-000000000f01',
+      '2026-11-06',
+      '{"plant_height":120}'::jsonb,
+      'Notes terrain',
+      'attacker-controlled-hash'
+  )$$,
+  '42501',
+  NULL,
+  'another profile cannot replay an existing offline receipt'
+);
+
+SELECT throws_ok(
+  $$SELECT preflight_offline_sync_operation(
+      'eeeeeeee-0000-0000-0000-000000000f01',
+      'bbbbbbbb-0000-0000-0000-000000000f01',
+      '2026-11-06',
+      '{"plant_height":120}'::jsonb,
+      'Notes terrain',
+      'attacker-controlled-hash'
+  )$$,
+  '42501',
+  NULL,
+  'preflight also prevents cross-profile receipt replay'
+);
+
+-- Restore the legitimate actor.
+SELECT set_config(
+  'request.jwt.claim.sub',
+  '22222222-0000-0000-0000-000000000f01',
+  true
+);
+
+-- A caller may lie about p_payload_hash when invoking the RPC directly.
+-- PostgreSQL must derive the receipt hash from the actual mutation payload
+-- and must never persist the caller-controlled hash as authority.
+SELECT lives_ok(
+  $$SELECT submit_offline_phenotype_evaluation(
+      'eeeeeeee-0000-0000-0000-000000000f07',
+      'bbbbbbbb-0000-0000-0000-000000000f01',
+      '2026-11-12',
+      '{"plant_height":121}'::jsonb,
+      'Direct RPC hash hardening',
+      'forged-client-hash'
+  )$$,
+  'a forged client hash cannot control the authoritative receipt hash'
+);
+
+SELECT ok(
+  (
+    SELECT
+      payload_hash <> 'forged-client-hash'
+      AND length(payload_hash) = 64
+    FROM offline_sync_receipts
+    WHERE operation_id = 'eeeeeeee-0000-0000-0000-000000000f07'
+  ),
+  'the receipt stores a server-derived SHA-256 hash rather than the supplied hash'
+);
 
 SELECT * FROM finish();
 ROLLBACK;
