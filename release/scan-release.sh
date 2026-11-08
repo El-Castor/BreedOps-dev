@@ -33,7 +33,7 @@ fi
 # Search only text-like source/documentation/configuration files.
 while IFS= read -r pattern || [[ -n "$pattern" ]]; do
   [[ -z "$pattern" || "$pattern" =~ ^[[:space:]]*# ]] && continue
-  if grep -RInI \
+  if grep -RInIi \
       --exclude='package-lock.json' \
       --exclude='scan-report.txt' \
       --exclude='LICENSE' \

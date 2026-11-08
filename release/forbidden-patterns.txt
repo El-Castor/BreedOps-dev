@@ -10,3 +10,7 @@ ResearchBrain
 Basic Memory
 Claude Code
 Serena MCP
+\.claude
+\.codex
+\.cursor
+\.agents\?/

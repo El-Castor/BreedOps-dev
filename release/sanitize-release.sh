@@ -45,6 +45,12 @@ for path in root.rglob("*"):
         continue
 
     original = text
+    if path == root / ".gitignore" and "# AI coding assistants" in text:
+        # Remove the development-only tooling section, keeping adjacent rules.
+        start = text.index("# ------------------------------------------------------------\n# AI coding assistants")
+        end = text.index("# ------------------------------------------------------------\n# PWA", start)
+        text = text[:start] + text[end:]
+
     for old, new in replacements:
         text = text.replace(old, new)
 
