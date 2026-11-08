@@ -1363,12 +1363,19 @@ td strong.code {
 .context-bar div {
   display: flex;
   gap: var(--space-2);
+  /* V2-07: a flex item's automatic minimum size otherwise floors at its
+   * content's intrinsic width - with a long program/team name in the
+   * "Programme"/"Équipe" value (<strong>), that can resist shrinking to
+   * the available width on narrow viewports. min-width: 0 lets the value
+   * wrap/shrink like an ordinary block instead. */
+  min-width: 0;
 }
 .context-bar span {
   color: var(--text-muted);
 }
 .context-bar strong {
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 .context-code {
   margin-left: var(--space-2);
