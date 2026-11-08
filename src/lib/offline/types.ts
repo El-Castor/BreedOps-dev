@@ -69,9 +69,10 @@ export interface OfflinePack {
   trialName: string;
   entries: OfflinePhenotypeEntry[];
   activeTraits: OfflineTraitDefinition[];
-  /** Deterministic hash of the active-trait configuration at snapshot time
-   * (src/lib/offline/config-fingerprint.ts) - recomputed server-side at
-   * sync time to detect CONFIG_CHANGED (V2-07 §15). */
+  /** Authoritative PostgreSQL fingerprint captured with the pack snapshot.
+   * It covers every configuration element that can affect validation or
+   * scoring (active traits, model, criteria, weights, eliminatory gates and
+   * decision rules) and is checked transactionally at sync time. */
   configFingerprint: string;
   snapshotCreatedAt: string;
 }

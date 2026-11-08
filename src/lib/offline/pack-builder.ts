@@ -1,4 +1,3 @@
-import { computeConfigFingerprint } from "./config-fingerprint";
 import type {
   OfflinePack,
   OfflinePhenotypeEntry,
@@ -16,16 +15,20 @@ export interface PackBuilderInput {
   trialName: string;
   entries: OfflinePhenotypeEntry[];
   activeTraits: OfflineTraitDefinition[];
+  /** Authoritative PostgreSQL fingerprint returned together with the active
+   * trait snapshot by offline_sync_program_configuration(). */
+  configFingerprint: string;
   /** Overridable only for deterministic tests - production callers always
    * let this default to "now". */
   snapshotCreatedAt?: string;
 }
 
-/** Pure: assembles the pack record and computes its configuration
- * fingerprint. The authenticated data fetch that supplies `entries` and
- * `activeTraits` lives in src/app/app/field-packs/actions.ts, scoped by
- * requireIdentity() + RLS - this function trusts its caller already did
- * that and never re-derives authorization itself. */
+/**
+ * Pure pack assembler. Configuration fetching, authorization and fingerprint
+ * calculation are deliberately outside this function: the authenticated
+ * server action obtains activeTraits + configFingerprint atomically from
+ * PostgreSQL before calling this builder.
+ */
 export function buildOfflinePack(input: PackBuilderInput): OfflinePack {
   return {
     packId: `${input.profileId}:${input.trialId}`,
@@ -40,7 +43,7 @@ export function buildOfflinePack(input: PackBuilderInput): OfflinePack {
     trialName: input.trialName,
     entries: input.entries,
     activeTraits: input.activeTraits,
-    configFingerprint: computeConfigFingerprint(input.activeTraits),
+    configFingerprint: input.configFingerprint,
     snapshotCreatedAt: input.snapshotCreatedAt ?? new Date().toISOString(),
   };
 }

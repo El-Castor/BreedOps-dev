@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { computeConfigFingerprint } from "../src/lib/offline/config-fingerprint";
 import { buildOfflinePack } from "../src/lib/offline/pack-builder";
 import type {
   OfflinePhenotypeEntry,
@@ -35,7 +34,8 @@ const entry: OfflinePhenotypeEntry = {
 };
 
 describe("buildOfflinePack", () => {
-  it("derives a profile-scoped packId and computes the config fingerprint", () => {
+  const configFingerprint = "authoritative-db-fingerprint";
+  it("derives a profile-scoped packId and preserves the authoritative config fingerprint", () => {
     const pack = buildOfflinePack({
       profileId: "profile-1",
       organizationId: "org-1",
@@ -47,6 +47,7 @@ describe("buildOfflinePack", () => {
       trialName: "Essai test",
       entries: [entry],
       activeTraits: [trait],
+      configFingerprint,
       snapshotCreatedAt: "2026-11-06T10:00:00.000Z",
     });
 
@@ -54,7 +55,7 @@ describe("buildOfflinePack", () => {
     expect(pack.schemaVersion).toBe(1);
     expect(pack.entries).toEqual([entry]);
     expect(pack.activeTraits).toEqual([trait]);
-    expect(pack.configFingerprint).toBe(computeConfigFingerprint([trait]));
+    expect(pack.configFingerprint).toBe(configFingerprint);
     expect(pack.snapshotCreatedAt).toBe("2026-11-06T10:00:00.000Z");
   });
 
@@ -71,6 +72,7 @@ describe("buildOfflinePack", () => {
       trialName: "Essai test",
       entries: [],
       activeTraits: [],
+      configFingerprint,
     });
     const snapshotMs = new Date(pack.snapshotCreatedAt).getTime();
     expect(snapshotMs).toBeGreaterThanOrEqual(before);
@@ -89,6 +91,7 @@ describe("buildOfflinePack", () => {
       trialName: "Essai 1",
       entries: [],
       activeTraits: [],
+      configFingerprint,
     });
     const b = buildOfflinePack({
       profileId: "profile-1",
@@ -101,6 +104,7 @@ describe("buildOfflinePack", () => {
       trialName: "Essai 2",
       entries: [],
       activeTraits: [],
+      configFingerprint,
     });
     expect(a.packId).not.toBe(b.packId);
   });

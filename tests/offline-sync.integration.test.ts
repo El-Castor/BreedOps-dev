@@ -4,15 +4,16 @@ import { createClient } from "@supabase/supabase-js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { hardDeleteOrganization } from "./db-cleanup";
 import { currentProfile } from "../scripts/lib/stack-identity.mjs";
-import { computeConfigFingerprint } from "../src/lib/offline/config-fingerprint";
 import { computePayloadHash } from "../src/lib/offline/payload-hash";
-import type { OfflineTraitDefinition } from "../src/lib/offline/types";
 
 const profile = currentProfile();
 const backend = JSON.parse(readFileSync(profile.backendFile, "utf8"));
 if (backend.API_URL !== profile.apiUrl)
   throw new Error("Tests require isolated local Supabase");
 const admin = createClient(backend.API_URL, backend.SERVICE_ROLE_KEY, {
+  auth: { persistSession: false },
+});
+const userClient = createClient(backend.API_URL, backend.ANON_KEY, {
   auth: { persistSession: false },
 });
 const base = profile.appOrigin;
@@ -69,26 +70,25 @@ async function syncOne(cookieHeader: string | undefined, operation: unknown) {
   return { status: response.status, body };
 }
 
-const fixtureTrait: OfflineTraitDefinition = {
-  traitId: "",
-  code: "plant_height",
-  name: "Hauteur",
-  description: null,
-  category: "morphology",
-  dataType: "numeric",
-  unit: "cm",
-  minimumValue: 0,
-  maximumValue: 300,
-  decimalPlaces: 1,
-  allowedValues: null,
-  direction: "neutral",
-  targetValue: null,
-  protocol: null,
-  moduleId: "",
-  moduleName: "Agronomie",
-  moduleOrder: 1,
-  traitOrder: 1,
-};
+async function currentConfigFingerprint(): Promise<string> {
+  const { data, error } = await userClient.rpc(
+    "offline_sync_program_configuration",
+    { p_program_id: ids.program },
+  );
+
+  if (error || !data) {
+    throw error ?? new Error("Missing offline program configuration");
+  }
+
+  const fingerprint = (data as unknown as { fingerprint?: unknown })
+    .fingerprint;
+
+  if (typeof fingerprint !== "string" || fingerprint.length === 0) {
+    throw new Error("Invalid offline configuration fingerprint");
+  }
+
+  return fingerprint;
+}
 
 describe.sequential(
   "offline sync endpoint (exact-once, idempotency, conflicts)",
@@ -147,7 +147,6 @@ describe.sequential(
         .single();
       if (trait.error) throw trait.error;
       ids.trait = trait.data.id;
-      fixtureTrait.traitId = ids.trait;
 
       const module_ = await admin
         .from("phenotyping_modules")
@@ -156,7 +155,6 @@ describe.sequential(
         .single();
       if (module_.error) throw module_.error;
       ids.module = module_.data.id;
-      fixtureTrait.moduleId = ids.module;
 
       const moduleTrait = await admin.from("phenotyping_module_traits").insert({
         module_id: ids.module,
@@ -240,6 +238,12 @@ describe.sequential(
         .update({ deleted_at: new Date().toISOString() })
         .eq("id", ids.archivedPhenotype);
 
+      const directLogin = await userClient.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (directLogin.error) throw directLogin.error;
+
       expect(
         (
           await request("/auth/login", {
@@ -252,6 +256,7 @@ describe.sequential(
     }, 30000);
 
     afterAll(async () => {
+      await userClient.auth.signOut();
       if (ids.user) await admin.auth.admin.deleteUser(ids.user);
       if (ids.team) hardDeleteOrganization(ids.team);
     });
@@ -263,7 +268,7 @@ describe.sequential(
     });
 
     it("synchronizes a fresh operation exactly once, and a retry never creates a second evaluation", async () => {
-      const fingerprint = computeConfigFingerprint([fixtureTrait]);
+      const fingerprint = await currentConfigFingerprint();
       const payload = {
         phenotypeId: ids.phenotype,
         evaluationDate: "2026-11-06",
@@ -312,7 +317,7 @@ describe.sequential(
     });
 
     it("rejects a reused operation_id carrying a different payload (V2-07 §34)", async () => {
-      const fingerprint = computeConfigFingerprint([fixtureTrait]);
+      const fingerprint = await currentConfigFingerprint();
       const payloadA = {
         phenotypeId: ids.phenotype,
         evaluationDate: "2026-11-07",
@@ -358,7 +363,7 @@ describe.sequential(
     });
 
     it("rejects a forged client payload hash before any scientific write", async () => {
-      const fingerprint = computeConfigFingerprint([fixtureTrait]);
+      const fingerprint = await currentConfigFingerprint();
       const payload = {
         phenotypeId: ids.phenotype,
         evaluationDate: "2026-11-12",
@@ -390,7 +395,7 @@ describe.sequential(
     });
 
     it("rejects a forged browser programId and trusts the phenotype-derived server program", async () => {
-      const fingerprint = computeConfigFingerprint([fixtureTrait]);
+      const fingerprint = await currentConfigFingerprint();
       const payload = {
         phenotypeId: ids.phenotype,
         evaluationDate: "2026-11-13",
@@ -422,7 +427,7 @@ describe.sequential(
     });
 
     it("replays an already committed operation even when configuration changed after the commit", async () => {
-      const fingerprint = computeConfigFingerprint([fixtureTrait]);
+      const fingerprint = await currentConfigFingerprint();
       const payload = {
         phenotypeId: ids.phenotype,
         evaluationDate: "2026-11-14",
@@ -484,9 +489,14 @@ describe.sequential(
     });
 
     it("reports CONFIG_CHANGED when the server-side active-trait configuration no longer matches the pack's fingerprint", async () => {
-      const staleFingerprint = computeConfigFingerprint([
-        { ...fixtureTrait, maximumValue: 9999 },
-      ]);
+      const staleFingerprint = await currentConfigFingerprint();
+
+      const changed = await admin
+        .from("phenotype_traits")
+        .update({ maximum_value: 250 })
+        .eq("id", ids.trait);
+      if (changed.error) throw changed.error;
+
       const payload = {
         phenotypeId: ids.phenotype,
         evaluationDate: "2026-11-08",
@@ -505,10 +515,16 @@ describe.sequential(
         packConfigurationFingerprint: staleFingerprint,
       });
       expect(body.results?.[0].resultCode).toBe("CONFIG_CHANGED");
+
+      const restored = await admin
+        .from("phenotype_traits")
+        .update({ maximum_value: 300 })
+        .eq("id", ids.trait);
+      if (restored.error) throw restored.error;
     });
 
     it("reports TARGET_ARCHIVED for a soft-deleted phenotype", async () => {
-      const fingerprint = computeConfigFingerprint([fixtureTrait]);
+      const fingerprint = await currentConfigFingerprint();
       const payload = {
         phenotypeId: ids.archivedPhenotype,
         evaluationDate: "2026-11-09",
@@ -530,7 +546,7 @@ describe.sequential(
     });
 
     it("reports VALIDATION_REJECTED for an out-of-bounds trait value, end to end", async () => {
-      const fingerprint = computeConfigFingerprint([fixtureTrait]);
+      const fingerprint = await currentConfigFingerprint();
       const payload = {
         phenotypeId: ids.phenotype,
         evaluationDate: "2026-11-10",
@@ -552,7 +568,7 @@ describe.sequential(
     });
 
     it("rejects a batch exceeding the bounded operation count", async () => {
-      const fingerprint = computeConfigFingerprint([fixtureTrait]);
+      const fingerprint = await currentConfigFingerprint();
       const operations = await Promise.all(
         Array.from({ length: 26 }, async (_, i) => {
           const payload = {
