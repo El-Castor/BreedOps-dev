@@ -1,0 +1,16 @@
+# Patterns searched case-insensitively in release text files.
+# Keep these targeted to internal tooling/provenance, not generic words such as "agent".
+CLAUDE.md
+PROMPT.md
+agend.md
+AGENTS.md
+.serena
+.beads
+ResearchBrain
+Basic Memory
+Claude Code
+Serena MCP
+\.claude
+\.codex
+\.cursor
+\.agents\?/
