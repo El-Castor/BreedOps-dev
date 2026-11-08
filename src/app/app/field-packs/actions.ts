@@ -1,7 +1,7 @@
 "use server";
 
 import { requireIdentity } from "@/lib/auth";
-import { fetchActiveOfflineTraits } from "@/lib/offline/active-traits";
+import { fetchOfflineProgramConfiguration } from "@/lib/offline/active-traits";
 import { buildOfflinePack } from "@/lib/offline/pack-builder";
 import type { OfflinePack, OfflinePhenotypeEntry } from "@/lib/offline/types";
 
@@ -85,7 +85,8 @@ export async function buildFieldOfflinePack(
     throw new Error("Impossible de charger les phénotypes de cet essai.");
   }
 
-  const activeTraits = await fetchActiveOfflineTraits(client, trial.program_id);
+  const { activeTraits, configFingerprint } =
+    await fetchOfflineProgramConfiguration(client, trial.program_id);
 
   const entries: OfflinePhenotypeEntry[] = (
     (phenotypeRows ?? []) as unknown as PhenotypeRow[]
@@ -107,5 +108,6 @@ export async function buildFieldOfflinePack(
     trialName: trial.name,
     entries,
     activeTraits,
+    configFingerprint,
   });
 }

@@ -23,25 +23,18 @@ interface ActiveTraitRow {
   trait_order: number;
 }
 
-/** Fetches and maps `program_active_traits()` (000016) to the camelCase
- * shape the offline pack/sync layer shares. The single source of this
- * mapping - both the pack-build action (src/app/app/field-packs/actions.ts)
- * and the sync endpoint's CONFIG_CHANGED check
- * (src/app/api/offline-sync/route.ts) call this, specifically so the two
- * can never independently drift out of sync with each other (the same
- * failure mode V2-06's hardening review targeted: two divergent copies of
- * one mapping silently disagreeing). */
-export async function fetchActiveOfflineTraits(
-  client: Awaited<ReturnType<typeof createClient>>,
-  programId: string,
-): Promise<OfflineTraitDefinition[]> {
-  const { data, error } = await client.rpc("program_active_traits", {
-    target_program_id: programId,
-  });
-  if (error) {
-    throw new Error("Impossible de charger les traits actifs du programme.");
-  }
-  return ((data ?? []) as ActiveTraitRow[]).map((row) => ({
+interface OfflineProgramConfigurationRow {
+  fingerprint: string;
+  active_traits: ActiveTraitRow[];
+}
+
+export interface OfflineProgramConfiguration {
+  activeTraits: OfflineTraitDefinition[];
+  configFingerprint: string;
+}
+
+function mapActiveTrait(row: ActiveTraitRow): OfflineTraitDefinition {
+  return {
     traitId: row.trait_id,
     code: row.code,
     name: row.name,
@@ -60,5 +53,50 @@ export async function fetchActiveOfflineTraits(
     moduleName: row.module_name,
     moduleOrder: row.module_order,
     traitOrder: row.trait_order,
-  }));
+  };
+}
+
+/**
+ * Loads the field-pack trait snapshot and its authoritative configuration
+ * fingerprint from one PostgreSQL statement snapshot.
+ *
+ * The fingerprint is deliberately NOT recomputed from activeTraits in
+ * TypeScript: PostgreSQL also includes the active selection model, criteria,
+ * coefficients, eliminatory gates and decision rules, which affect the
+ * scientific result of submit_trait_evaluation() but are not needed by the
+ * offline field form itself.
+ */
+export async function fetchOfflineProgramConfiguration(
+  client: Awaited<ReturnType<typeof createClient>>,
+  programId: string,
+): Promise<OfflineProgramConfiguration> {
+  const { data, error } = await client.rpc(
+    "offline_sync_program_configuration",
+    {
+      p_program_id: programId,
+    },
+  );
+
+  if (error || !data) {
+    throw new Error(
+      "Impossible de charger la configuration hors ligne du programme.",
+    );
+  }
+
+  const snapshot = data as unknown as OfflineProgramConfigurationRow;
+
+  if (
+    typeof snapshot.fingerprint !== "string" ||
+    snapshot.fingerprint.length === 0 ||
+    !Array.isArray(snapshot.active_traits)
+  ) {
+    throw new Error(
+      "La configuration hors ligne retournée par le serveur est invalide.",
+    );
+  }
+
+  return {
+    activeTraits: snapshot.active_traits.map(mapActiveTrait),
+    configFingerprint: snapshot.fingerprint,
+  };
 }

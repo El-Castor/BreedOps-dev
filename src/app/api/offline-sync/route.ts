@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { resolveIdentity } from "@/lib/auth";
-import { fetchActiveOfflineTraits } from "@/lib/offline/active-traits";
-import { computeConfigFingerprint } from "@/lib/offline/config-fingerprint";
 import { computePayloadHash } from "@/lib/offline/payload-hash";
 import type { OfflineSyncResultCode } from "@/lib/offline/types";
 
@@ -88,6 +86,9 @@ function mapRpcErrorMessage(message: string): {
   if (message.startsWith("TARGET_ARCHIVED")) {
     return { resultCode: "TARGET_ARCHIVED", detail: message };
   }
+  if (message.startsWith("CONFIG_CHANGED")) {
+    return { resultCode: "CONFIG_CHANGED", detail: message };
+  }
   if (message.startsWith("IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD")) {
     return { resultCode: "IDEMPOTENCY_PAYLOAD_MISMATCH", detail: message };
   }
@@ -127,19 +128,6 @@ export async function POST(request: Request) {
       { error: "VALIDATION_REJECTED", issues: parsed.error.issues },
       { status: 400 },
     );
-  }
-
-  // One fingerprint check per distinct program_id present in the batch,
-  // not per operation - a field session normally queues many evaluations
-  // against the same trial/program.
-  const fingerprintByProgram = new Map<string, string>();
-  async function currentFingerprintFor(programId: string): Promise<string> {
-    const cached = fingerprintByProgram.get(programId);
-    if (cached) return cached;
-    const traits = await fetchActiveOfflineTraits(client, programId);
-    const fingerprint = computeConfigFingerprint(traits);
-    fingerprintByProgram.set(programId, fingerprint);
-    return fingerprint;
   }
 
   const results: OperationResult[] = [];
@@ -218,30 +206,6 @@ export async function POST(request: Request) {
       continue;
     }
 
-    let currentFingerprint: string;
-    try {
-      currentFingerprint = await currentFingerprintFor(preflight.program_id);
-    } catch {
-      results.push(
-        rejected(
-          op.operationId,
-          "RETRYABLE_SERVER_ERROR",
-          "Impossible de vérifier la configuration actuelle du programme.",
-        ),
-      );
-      continue;
-    }
-    if (currentFingerprint !== op.packConfigurationFingerprint) {
-      results.push(
-        rejected(
-          op.operationId,
-          "CONFIG_CHANGED",
-          "La configuration des traits actifs a changé depuis la préparation de cet essai hors ligne.",
-        ),
-      );
-      continue;
-    }
-
     const { data, error } = await client.rpc(
       "submit_offline_phenotype_evaluation",
       {
@@ -251,6 +215,7 @@ export async function POST(request: Request) {
         p_submitted_values: op.values,
         p_evaluation_notes: op.notes,
         p_payload_hash: serverPayloadHash,
+        p_pack_configuration_fingerprint: op.packConfigurationFingerprint,
       },
     );
 

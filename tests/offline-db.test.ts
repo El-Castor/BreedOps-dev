@@ -2,7 +2,6 @@ import "fake-indexeddb/auto";
 import { type DBSchema, openDB } from "idb";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as offlineDb from "../src/lib/offline/db";
-import { computeConfigFingerprint } from "../src/lib/offline/config-fingerprint";
 import { computePayloadHash } from "../src/lib/offline/payload-hash";
 import type {
   OfflineOutboxOperation,
@@ -247,80 +246,6 @@ describe("IndexedDB schema upgrades are forward-safe", () => {
     expect(preserved?.label).toBe("before upgrade");
     expect(v2.objectStoreNames.contains("outbox")).toBe(true);
     v2.close();
-  });
-});
-
-describe("computeConfigFingerprint", () => {
-  const trait = (
-    overrides: Partial<OfflineTraitDefinition> = {},
-  ): OfflineTraitDefinition => ({
-    traitId: "t1",
-    code: "HEIGHT",
-    name: "Hauteur",
-    description: null,
-    category: "morphology",
-    dataType: "numeric",
-    unit: "cm",
-    minimumValue: 0,
-    maximumValue: 300,
-    decimalPlaces: 1,
-    allowedValues: null,
-    direction: "higher_is_better",
-    targetValue: null,
-    protocol: null,
-    moduleId: "module-1",
-    moduleName: "Module 1",
-    moduleOrder: 1,
-    traitOrder: 1,
-    ...overrides,
-  });
-
-  it("is independent of trait array order", () => {
-    const a = computeConfigFingerprint([
-      trait({ traitId: "t1" }),
-      trait({ traitId: "t2" }),
-    ]);
-    const b = computeConfigFingerprint([
-      trait({ traitId: "t2" }),
-      trait({ traitId: "t1" }),
-    ]);
-    expect(a).toBe(b);
-  });
-
-  it("is independent of allowedValues order", () => {
-    const a = computeConfigFingerprint([
-      trait({
-        dataType: "categorical",
-        allowedValues: ["low", "high", "medium"],
-      }),
-    ]);
-    const b = computeConfigFingerprint([
-      trait({
-        dataType: "categorical",
-        allowedValues: ["high", "low", "medium"],
-      }),
-    ]);
-    expect(a).toBe(b);
-  });
-
-  it("changes when a validity-relevant field changes", () => {
-    const a = computeConfigFingerprint([trait({ maximumValue: 300 })]);
-    const b = computeConfigFingerprint([trait({ maximumValue: 250 })]);
-    expect(a).not.toBe(b);
-  });
-
-  it("is independent of display-only fields (name/description/protocol)", () => {
-    const a = computeConfigFingerprint([
-      trait({ name: "Hauteur", description: "x" }),
-    ]);
-    const b = computeConfigFingerprint([
-      trait({
-        name: "Hauteur (révisé)",
-        description: "y",
-        protocol: "voir fiche",
-      }),
-    ]);
-    expect(a).toBe(b);
   });
 });
 
