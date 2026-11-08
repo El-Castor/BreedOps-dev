@@ -3358,6 +3358,19 @@ tr.archived-row td:first-child {
 .empty-state .button-link {
   grid-column: 2;
 }
+@media (max-width: 480px) {
+  /* V2-07: .button-link is white-space: nowrap by default (sized to its
+   * label's full intrinsic width), which the EmptyState action's grid
+   * column can't shrink below on very small viewports - confirmed via CI
+   * diagnostic on /app/field-packs's "Essais multi-environnements" action
+   * (right edge past the 320px viewport). Scoped to EmptyState rather
+   * than every .button-link in the app. */
+  .empty-state .button-link {
+    max-width: 100%;
+    white-space: normal;
+    text-align: center;
+  }
+}
 .register-toolbar form select {
   width: auto;
 }
