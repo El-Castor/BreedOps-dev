@@ -13,7 +13,7 @@ fi
 
 if [[ ! -f "${SCRIPT_DIR}/LICENSE" ]]; then
   echo "ERROR: release/LICENSE is missing." >&2
-  echo "Copy and edit release/LICENSE.proprietary-template first, after confirming the copyright holder." >&2
+  echo "Copy and edit release/LICENSE.proprietary-template first." >&2
   exit 1
 fi
 
@@ -50,7 +50,6 @@ while IFS= read -r entry || [[ -n "$entry" ]]; do
   copy_path "$entry"
 done < "$ALLOWLIST"
 
-# Normalize release-only names/layout.
 mv "$TARGET/README.release.md" "$TARGET/README.md"
 mv "$TARGET/release/LICENSE" "$TARGET/LICENSE"
 mv "$TARGET/release/THIRD_PARTY_NOTICES.md" "$TARGET/THIRD_PARTY_NOTICES.md"
@@ -58,16 +57,21 @@ mv "$TARGET/release/THIRD_PARTY_NOTICES.md" "$TARGET/THIRD_PARTY_NOTICES.md"
 rm -rf "$TARGET/docs"
 mv "$TARGET/docs-release" "$TARGET/docs"
 
-# release/ is build machinery for BreedOps-dev, not part of the release repository.
+# Keep release machinery out of the distribution.
 rm -rf "$TARGET/release"
 
-# Ensure generated service-worker output is absent before validation/build.
+# Generated PWA artifacts must be rebuilt, never copied.
 rm -f \
   "$TARGET/public/sw.js" \
   "$TARGET/public/sw.js.map" \
   "$TARGET"/public/swe-worker-*.js \
   "$TARGET"/public/swe-worker-*.js.map 2>/dev/null || true
 
+# Remove internal-development provenance from comments/configs in the snapshot
+# only. BreedOps-dev remains untouched.
+"${SCRIPT_DIR}/sanitize-release.sh" "$TARGET"
+
+# Strict verification after sanitization.
 "${SCRIPT_DIR}/scan-release.sh" "$TARGET"
 
 echo
