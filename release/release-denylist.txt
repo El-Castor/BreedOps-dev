@@ -1,0 +1,19 @@
+# Paths that must never appear in the release repository.
+.beads
+.beads.backup-20260827
+.serena
+.serena-lsp-trace-filtered.txt
+
+AGENTS.md
+CLAUDE.md
+PROMPT.md
+agend.md
+
+docs/plans
+docs/local-development.md
+
+.codex
+.cursor
+.agent
+.agents
+.memory

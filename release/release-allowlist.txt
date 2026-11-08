@@ -1,0 +1,35 @@
+# BreedOps release allowlist
+# One path per line, relative to the BreedOps-dev repository root.
+# Directories are copied recursively.
+
+.env.example
+.github/workflows/ci.yml
+.gitignore
+
+README.release.md
+release/LICENSE
+release/THIRD_PARTY_NOTICES.md
+
+analytics-r
+assets/breedops_banner.png
+assets/breedops_logo.png
+
+docs-release
+
+e2e
+public
+scripts
+src
+supabase
+tests
+
+eslint.config.js
+next-env.d.ts
+next.config.mjs
+package-lock.json
+package.json
+playwright.config.ts
+tailwind.config.ts
+tsconfig.json
+tsconfig.worker.json
+vitest.config.mts
