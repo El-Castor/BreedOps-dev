@@ -4324,6 +4324,20 @@ tr.archived-row td:first-child {
 .offline-card > .button-link {
   justify-self: start;
 }
+@media (max-width: 480px) {
+  /* V2-07: measured locally at 320px - .button-link's default
+   * white-space: nowrap leaves this label ("Ouvrir l'espace terrain
+   * hors ligne") only ~27px of margin before the viewport edge, the
+   * tightest margin on this page and the same unconstrained-nowrap
+   * pattern already confirmed to overflow on /app/field-packs's
+   * EmptyState action under CI's font rendering. Scoped to this one
+   * link rather than the global .button-link. */
+  .offline-card > .button-link {
+    max-width: 100%;
+    white-space: normal;
+    text-align: center;
+  }
+}
 
 .field-pack-card {
   display: grid;
