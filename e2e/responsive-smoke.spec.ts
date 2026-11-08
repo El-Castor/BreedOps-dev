@@ -217,6 +217,35 @@ for (const vp of WIDTHS) {
       const overflow = await page.evaluate(
         () => document.body.scrollWidth > window.innerWidth + 1,
       );
+      if (overflow) {
+        // TEMP DIAGNOSTIC - CI-only reproduction, removed before any
+        // follow-up commit.
+        const report = await page.evaluate(() => ({
+          innerWidth: window.innerWidth,
+          bodyScrollWidth: document.body.scrollWidth,
+          documentElementScrollWidth: document.documentElement.scrollWidth,
+          offenders: Array.from(document.querySelectorAll("*"))
+            .map((el) => {
+              const r = el.getBoundingClientRect();
+              return {
+                tag: el.tagName,
+                id: el.id,
+                cls: el.className,
+                left: r.left,
+                right: r.right,
+                width: r.width,
+                clientWidth: (el as HTMLElement).clientWidth,
+                scrollWidth: (el as HTMLElement).scrollWidth,
+              };
+            })
+            .filter((x) => x.right > window.innerWidth + 1 || x.left < -1)
+            .sort((a, b) => b.right - a.right),
+        }));
+        console.log(
+          `=== OVERFLOW DIAGNOSTIC at ${url} (${vp.width}px) ===`,
+          JSON.stringify(report, null, 2),
+        );
+      }
       expect(
         overflow,
         `${url} document.body.scrollWidth should not exceed the viewport at ${vp.width}px`,
